@@ -14,6 +14,98 @@
         <script src="https://unpkg.com/three@0.140.0/build/three.min.js"></script>
         <!--<script src="https://unpkg.com/three@0.140.0/examples/js/objects/Sky.js"></script>-->
         <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+        
+        <script id="sky_vs" type="x-shader/x-vertex">
+        
+            varying vec3 vPosition;
+        
+            void main(){
+                vec4 pos = modelMatrix * vec4( position, 1.0 );
+                vPosition = pos.xyz;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+                gl_Position.z = gl_Position.w; // set z to camera.far
+            }
+        
+        </script>
+        <script id="sky_fs" type="x-shader/x-fragment">
+
+            #define USE_DEFAULTS 0
+
+            #define DEF_TOTALRAYLEIGH vec3( 5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5 )
+            #define DEF_MIECONST vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 )
+            #define LAMBDA vec3( 680E-9, 550E-9, 450E-9 )
+            #define MIE_K vec3( 0.686, 0.678, 0.666 )
+            #define MIE_V 4.0
+            #define UP vec3( 0., 1., 0. )
+            
+            const float PI = 2. * acos( 0 );
+            const float SUN_CUTOFFANG = PI / 1.95;
+            const float SUN_STEEP = 2./3.;
+            const float SUN_Y0 = 1000;
+
+            varying vec3 vPosition;
+
+            uniform float rayleigh;
+            uniform float turbidity;
+            uniform float mieCoefficient;
+
+            uniform float temperature;
+            uniform float pressure;
+            uniform float humidity;
+
+            float sunIntensity( float cos_za ) {
+                cos_za = clamp( cos_za, -1.0, 1.0 );
+                return SUN_Y0 * max( 0.0, 1.0 - exp( -( ( SUN_CUTOFFANG - acos( cos_za ) ) * SUN_STEEP ) ) );
+            }
+
+            vec3 totalRayleigh(){
+            #if USE_DEFAULTS
+                return DEF_TOTALRAYLEIGH;
+            #else
+            float pn = 0.0035;
+            #if USE_TPH
+                // According to https://www.itu.int/dms_pubrec/itu-r/rec/p/R-REC-P.453-11-201507-S!!PDF-E.pdf:
+                float tc = temperature - 273.0;
+                float e = humidity * (1. + 1.e-4 * (7.2 + pressure * (0.00320 + 5.9e-7 * tc * tc))) * 6.1121 * exp( ( 18.678 - tc / 234.5 ) * tc / (tc + 257.14));
+                float Nr = (77.6 * pressure - 5.6 * e + 3.75e5 * e / temperature) / temperature;
+                // refractive index of air (default: 1.0003):
+                float n = 1.0 + Nr * 1.e-6;
+                // number of molecules per unit volume for air (default at 228.15ºK 1013.25mBar: float N = 2.545e25);
+                float N = 100.0 * pressure / (1.380649e-23 * temperature);
+            #else
+                float n = 1.0003;
+                float N = 2.545e25;
+            #endif
+                return (8.0 * pow(pi, 3.0) * pow(pow(n, 2.0) - 1.0, 2.0) * (6.0 + 3.0 * pn)) / (3.0 * N * pow(lambda, vec3(4.0)) * (6.0 - 7.0 * pn));
+            #endif
+            }
+
+            vec3 totalMie() {
+                float c = ( 0.2 * turbidity ) * 10E-18;
+                return 0.434 * c * DEF_MIECONST;
+            }
+
+            void main(){
+
+                varying vec3 vBetaR;
+                varying vec3 vBetaM;
+                
+                vec3 vSunDirection = normalize( sunPosition );
+                float vSunE = sunIntensity( dot( vSunDirection, up ) );
+                float vSunfade = 1.0 - clamp( 1.0 - exp( ( sunPosition.y / 450000.0 ) ), 0.0, 1.0 );
+                float rayleighCoefficient = rayleigh - ( 1.0 * ( 1.0 - vSunfade ) );
+
+                // extinction (absorbtion + out scattering)
+                // rayleigh coefficients
+                vec3 vBetaR = totalRayleigh() * rayleighCoefficient;
+                // mie coefficients
+                vec3vBetaM = totalMie() * mieCoefficient;
+            }
+
+        </script>
+
+
+
         <script id="skyVertexShader" type="x-shader/x-vertex">
             uniform vec3 sunPosition;
             uniform float rayleigh;
